@@ -1,0 +1,74 @@
+name: Build and Release DeeClipper
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build, Test & Package
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run Unit Tests
+        run: dotnet test --verbosity normal
+
+      - name: Publish Self-Contained Portable Build
+        run: >
+          dotnet publish src/DeeClipper.App
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -o publish/full
+
+      - name: Publish Framework-Dependent Lite Build
+        run: >
+          dotnet publish src/DeeClipper.App
+          -c Release
+          -r win-x64
+          --self-contained false
+          -o publish/lite
+
+      - name: Create ZIP Packages
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "publish/full/*" -DestinationPath "DeeClipper-portable.zip" -Force
+          Compress-Archive -Path "publish/lite/*" -DestinationPath "DeeClipper-lite.zip" -Force
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeeClipper-Packages
+          path: |
+            DeeClipper-portable.zip
+            DeeClipper-lite.zip
+          retention-days: 14
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            DeeClipper-portable.zip
+            DeeClipper-lite.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

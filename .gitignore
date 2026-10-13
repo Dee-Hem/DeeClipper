@@ -1,0 +1,29 @@
+## Build and output folders
+bin/
+obj/
+publish/
+publish/*
+*.zip
+
+## Visual Studio & IDE files
+.vs/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.sln.docstates
+
+## Key stores and credentials
+*.jks
+*.keystore
+*.pfx
+*.snk
+
+## Environment & Secrets
+.env
+.env.*
+
+## Local SQLite databases (development test artifacts)
+*.db-shm
+*.db-wal
+TestResults/
