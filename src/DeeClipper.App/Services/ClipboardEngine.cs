@@ -44,7 +44,7 @@ public class ClipboardEngine : IDisposable
         _memoryStore = memoryStore;
 
         _debounceTimer = new System.Threading.Timer(
-            _ => _ = ProcessClipboardChangeAsync(),
+            _ => QueueClipboardProcessing(),
             null,
             Timeout.Infinite,
             Timeout.Infinite
@@ -115,6 +115,14 @@ public class ClipboardEngine : IDisposable
             handled = true;
         }
         return IntPtr.Zero;
+    }
+
+    private void QueueClipboardProcessing()
+    {
+        if (_hwndSource == null || _isDisposed)
+            return;
+
+        _ = _hwndSource.Dispatcher.InvokeAsync(ProcessClipboardChangeAsync);
     }
 
     public void SetPaused(bool paused)
