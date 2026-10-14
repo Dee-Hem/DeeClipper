@@ -58,6 +58,46 @@ public class AppSettings
     public bool StartWithWindows { get; set; } = false;
 
     /// <summary>
+    /// Whether popup opens near the mouse cursor (true) or centered on the monitor (false). Default true.
+    /// </summary>
+    public bool PopupPositionNearCursor { get; set; } = true;
+
+    /// <summary>
+    /// Popup window width in device-independent pixels. Default 680.
+    /// </summary>
+    public double PopupWidth { get; set; } = 680;
+
+    /// <summary>
+    /// Popup window height in device-independent pixels. Default 500.
+    /// </summary>
+    public double PopupHeight { get; set; } = 500;
+
+    /// <summary>
+    /// Whether the preview pane in the popup is visible. Default true.
+    /// </summary>
+    public bool ShowPreviewPane { get; set; } = true;
+
+    /// <summary>
+    /// Whether first run onboarding wizard has been completed. Default false.
+    /// </summary>
+    public bool FirstRunCompleted { get; set; } = false;
+
+    /// <summary>
+    /// Whether clipboard monitoring is currently paused. Default false.
+    /// </summary>
+    public bool IsMonitoringPaused { get; set; } = false;
+
+    /// <summary>
+    /// Whether compact item list view mode is enabled. Default false.
+    /// </summary>
+    public bool CompactMode { get; set; } = false;
+
+    /// <summary>
+    /// Base font size for UI preview and list items. Default 13.
+    /// </summary>
+    public double FontSize { get; set; } = 13.0;
+
+    /// <summary>
     /// Blocklist of executable names (without .exe) to ignore when copied from.
     /// </summary>
     public List<string> AppBlocklist { get; set; } = new()

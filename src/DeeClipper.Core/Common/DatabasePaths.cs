@@ -27,4 +27,24 @@ public class DatabasePaths
         Directory.CreateDirectory(ImagesDirectory);
         Directory.CreateDirectory(LogsDirectory);
     }
+
+    public long GetDatabaseSizeBytes()
+    {
+        long size = 0;
+        if (File.Exists(DatabasePath))
+        {
+            size += new FileInfo(DatabasePath).Length;
+        }
+        var walPath = DatabasePath + "-wal";
+        if (File.Exists(walPath))
+        {
+            size += new FileInfo(walPath).Length;
+        }
+        var shmPath = DatabasePath + "-shm";
+        if (File.Exists(shmPath))
+        {
+            size += new FileInfo(shmPath).Length;
+        }
+        return size;
+    }
 }

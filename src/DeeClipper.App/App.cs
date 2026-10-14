@@ -16,7 +16,41 @@ public class App : WpfApplication
     private static ClipboardEngine? _clipboardEngine;
     private static PowerAndSessionWatcher? _powerWatcher;
     private static MainWindow? _mainWindow;
+    private static PopupWindow? _popupWindow;
+    private static PasteEngine? _pasteEngine;
+    private static HotkeyManager? _hotkeyManager;
     private static DatabaseService? _databaseService;
+    private static SettingsManager? _settingsManager;
+    private static DatabasePaths? _paths;
+    private static Dialogs.SettingsWindow? _settingsWindow;
+
+    public static void OpenSettingsWindow()
+    {
+        Current?.Dispatcher?.Invoke(() =>
+        {
+            if (_settingsWindow != null && _settingsWindow.IsVisible)
+            {
+                _settingsWindow.Activate();
+                _settingsWindow.Focus();
+                return;
+            }
+
+            if (_settingsManager != null && _databaseService != null && _paths != null &&
+                _clipboardEngine != null && _hotkeyManager != null)
+            {
+                _settingsWindow = new Dialogs.SettingsWindow(
+                    _settingsManager,
+                    _databaseService,
+                    _paths,
+                    _clipboardEngine,
+                    _hotkeyManager,
+                    owner: _mainWindow?.IsVisible == true ? _mainWindow : null
+                );
+                _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+                _settingsWindow.Show();
+            }
+        });
+    }
 
     [STAThread]
     public static void Main(string[] args)
@@ -54,8 +88,9 @@ public class App : WpfApplication
     {
         try
         {
-            var settingsManager = new SettingsManager(paths.SettingsPath);
-            var settings = settingsManager.Current;
+            _paths = paths;
+            _settingsManager = new SettingsManager(paths.SettingsPath);
+            var settings = _settingsManager.Current;
 
             _databaseService = new DatabaseService(paths, settings);
             _ = _databaseService.InitializeAsync();
@@ -69,11 +104,21 @@ public class App : WpfApplication
                 _clipboardEngine.ReRegisterListener();
             });
 
-            var mainViewModel = new MainViewModel(_databaseService, memoryStore, _clipboardEngine);
+            _pasteEngine = new PasteEngine(_databaseService, _clipboardEngine, settings, memoryStore);
+
+            var popupViewModel = new PopupViewModel(_databaseService, memoryStore, _clipboardEngine, _pasteEngine, settings);
+            _popupWindow = new PopupWindow(popupViewModel, _pasteEngine, settings);
+
+            // Pre-warm popup window so it opens in under 100ms
+            _popupWindow.Show();
+            _popupWindow.Hide();
+
+            var mainViewModel = new MainViewModel(_databaseService, memoryStore, _clipboardEngine, settings, _pasteEngine);
             _mainWindow = new MainWindow(mainViewModel);
 
             _trayManager = new TrayManager(
                 onOpenWindow: BringMainWindowToFront,
+                onOpenSettings: OpenSettingsWindow,
                 onTogglePause: paused => _clipboardEngine.SetPaused(paused),
                 onPrivateMode: minutes => _clipboardEngine.SetPrivateMode(minutes),
                 onExit: () =>
@@ -91,9 +136,55 @@ public class App : WpfApplication
                 _trayManager.UpdatePauseState(isPaused);
             };
 
+            // Initialize global hotkey listener
+            _hotkeyManager = new HotkeyManager();
+            _hotkeyManager.HotkeyPressed += () =>
+            {
+                Current?.Dispatcher?.Invoke(() =>
+                {
+                    _popupWindow?.OpenPopup();
+                });
+            };
+            _hotkeyManager.RegistrationFailed += msg =>
+            {
+                _trayManager?.ShowBalloon(msg, "Hotkey Warning");
+            };
+
+            _hotkeyManager.Register(settings.PopupHotkey);
+
+            if (settings.QuickPasteSlots)
+            {
+                _hotkeyManager.RegisterQuickPasteSlots();
+            }
+            _hotkeyManager.QuickPasteSlotPressed += slot =>
+            {
+                Current?.Dispatcher?.Invoke(async () =>
+                {
+                    try
+                    {
+                        var item = await _databaseService.GetPinnedItemBySlotAsync(slot);
+                        if (item != null && _pasteEngine != null)
+                        {
+                            await _pasteEngine.ExecutePasteAsync(item, PasteMode.DirectPaste);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogError($"Error executing quick-paste for slot {slot}", ex);
+                    }
+                });
+            };
+
             if (!startInBackground)
             {
                 _mainWindow.Show();
+
+                // Show onboarding on first run
+                if (!settings.FirstRunCompleted)
+                {
+                    var onboarding = new Dialogs.OnboardingWindow(_settingsManager, _mainWindow);
+                    onboarding.ShowDialog();
+                }
             }
 
             Run();
@@ -178,6 +269,8 @@ public class App : WpfApplication
 
     private static void Cleanup()
     {
+        _hotkeyManager?.Dispose();
+        _popupWindow?.Close();
         _trayManager?.Dispose();
         _clipboardEngine?.Dispose();
         _powerWatcher?.Dispose();

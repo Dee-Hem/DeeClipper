@@ -4,7 +4,9 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using DeeClipper.App.Services;
 using DeeClipper.Core.Models;
+using DeeClipper.Core.Settings;
 using DeeClipper.Core.Storage;
+using DeeClipper.Core.Text;
 using WpfApplication = System.Windows.Application;
 
 namespace DeeClipper.App.ViewModels;
@@ -24,14 +26,18 @@ public class MainViewModel : INotifyPropertyChanged
     private readonly DatabaseService _db;
     private readonly MemorySensitiveStore _memoryStore;
     private readonly ClipboardEngine _engine;
+    private readonly AppSettings? _settings;
+    private readonly PasteEngine? _pasteEngine;
 
     private string _searchText = string.Empty;
     private ItemFilter _selectedFilter = ItemFilter.All;
+    private long? _selectedGroupId;
     private ItemViewModel? _selectedItem;
     private string _statusText = "Ready";
 
     public ObservableCollection<ItemViewModel> PinnedItems { get; } = new();
     public ObservableCollection<ItemViewModel> UnpinnedItems { get; } = new();
+    public ObservableCollection<ClipboardGroup> Groups { get; } = new();
 
     public string SearchText
     {
@@ -67,7 +73,25 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    public bool IsFilterAll => SelectedFilter == ItemFilter.All;
+    public long? SelectedGroupId
+    {
+        get => _selectedGroupId;
+        set
+        {
+            if (_selectedGroupId != value)
+            {
+                _selectedGroupId = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsGroupFilterActive));
+                _ = RefreshAsync();
+            }
+        }
+    }
+
+    public bool IsGroupFilterActive => _selectedGroupId.HasValue;
+    public bool QuickPasteSlotsEnabled => _settings?.QuickPasteSlots ?? false;
+
+    public bool IsFilterAll => SelectedFilter == ItemFilter.All && !SelectedGroupId.HasValue;
     public bool IsFilterPinned => SelectedFilter == ItemFilter.Pinned;
     public bool IsFilterText => SelectedFilter == ItemFilter.Text;
     public bool IsFilterLinks => SelectedFilter == ItemFilter.Links;
@@ -103,11 +127,18 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    public MainViewModel(DatabaseService db, MemorySensitiveStore memoryStore, ClipboardEngine engine)
+    public MainViewModel(
+        DatabaseService db,
+        MemorySensitiveStore memoryStore,
+        ClipboardEngine engine,
+        AppSettings? settings = null,
+        PasteEngine? pasteEngine = null)
     {
         _db = db;
         _memoryStore = memoryStore;
         _engine = engine;
+        _settings = settings;
+        _pasteEngine = pasteEngine;
 
         _engine.ItemsUpdated += () =>
         {
@@ -129,7 +160,12 @@ public class MainViewModel : INotifyPropertyChanged
     {
         try
         {
-            // 1. Fetch database items
+            // 1. Fetch groups
+            var groups = await _db.GetGroupsAsync();
+            Groups.Clear();
+            foreach (var g in groups) Groups.Add(g);
+
+            // 2. Fetch database items
             ClipboardItemType? typeFilter = SelectedFilter switch
             {
                 ItemFilter.Text => ClipboardItemType.Text,
@@ -145,30 +181,36 @@ public class MainViewModel : INotifyPropertyChanged
                 query: string.IsNullOrWhiteSpace(SearchText) ? null : SearchText,
                 type: typeFilter,
                 isPinned: pinFilter,
+                groupId: SelectedGroupId,
                 limit: 500
             );
 
-            // 2. Fetch memory sensitive items (unpinned)
+            // 3. Fetch memory sensitive items (unpinned)
             var memItems = _memoryStore.GetItems();
             if (typeFilter.HasValue)
             {
                 memItems = memItems.Where(x => x.Type == typeFilter.Value).ToList();
             }
-            if (pinFilter == true)
+            if (pinFilter == true || SelectedGroupId.HasValue)
             {
-                memItems.Clear(); // memory store only contains unpinned items
+                memItems.Clear(); // memory store items are unpinned and not grouped
             }
             if (!string.IsNullOrWhiteSpace(SearchText))
             {
                 var q = SearchText.Trim();
                 memItems = memItems.Where(x =>
                     (x.ContentText?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                    (x.SourceApp?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                    (x.SourceApp?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (x.Label?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
                 ).ToList();
             }
 
             // Combine items
-            var allPinned = dbItems.Where(x => x.IsPinned).Select(x => new ItemViewModel(x)).ToList();
+            var allPinned = dbItems
+                .Where(x => x.IsPinned)
+                .OrderBy(x => x.PinOrder)
+                .Select(x => new ItemViewModel(x))
+                .ToList();
 
             var allUnpinned = memItems.Select(x => new ItemViewModel(x))
                 .Concat(dbItems.Where(x => !x.IsPinned).Select(x => new ItemViewModel(x)))
@@ -223,6 +265,152 @@ public class MainViewModel : INotifyPropertyChanged
             await _db.DeleteItemAsync(vm.Id);
         }
         await RefreshAsync();
+    }
+
+    public async Task SetItemLabelAsync(ItemViewModel vm, string? label)
+    {
+        if (vm.Id > 0)
+        {
+            await _db.SetLabelAsync(vm.Id, string.IsNullOrWhiteSpace(label) ? null : label);
+        }
+        vm.Label = string.IsNullOrWhiteSpace(label) ? null : label;
+        await RefreshAsync();
+    }
+
+    public async Task SetItemGroupAsync(ItemViewModel vm, long? groupId)
+    {
+        if (vm.Id > 0)
+        {
+            await _db.SetGroupAsync(vm.Id, groupId);
+        }
+        vm.GroupId = groupId;
+        await RefreshAsync();
+    }
+
+    public async Task BulkSetPinAsync(IEnumerable<ItemViewModel> items, bool isPinned)
+    {
+        var dbIds = items.Where(x => x.Id > 0).Select(x => x.Id).ToList();
+        if (dbIds.Count > 0)
+        {
+            await _db.BulkSetPinAsync(dbIds, isPinned);
+        }
+        await RefreshAsync();
+    }
+
+    public async Task BulkSetGroupAsync(IEnumerable<ItemViewModel> items, long? groupId)
+    {
+        var dbIds = items.Where(x => x.Id > 0).Select(x => x.Id).ToList();
+        if (dbIds.Count > 0)
+        {
+            await _db.BulkSetGroupAsync(dbIds, groupId);
+        }
+        await RefreshAsync();
+    }
+
+    public async Task BulkDeleteAsync(IEnumerable<ItemViewModel> items)
+    {
+        var list = items.ToList();
+        foreach (var item in list)
+        {
+            if (item.Id < 0)
+            {
+                _memoryStore.Remove(item.Id);
+            }
+        }
+        var dbIds = list.Where(x => x.Id > 0).Select(x => x.Id).ToList();
+        if (dbIds.Count > 0)
+        {
+            await _db.BulkDeleteAsync(dbIds);
+        }
+        await RefreshAsync();
+    }
+
+    public async Task ReorderPinsAsync(IReadOnlyList<long> orderedPinnedIds)
+    {
+        await _db.UpdatePinOrderAsync(orderedPinnedIds);
+        await RefreshAsync();
+    }
+
+    public async Task CreateGroupAsync(string name, string color)
+    {
+        await _db.CreateGroupAsync(name, color);
+        await RefreshAsync();
+    }
+
+    public async Task UpdateGroupAsync(long id, string name, string color)
+    {
+        await _db.UpdateGroupAsync(id, name, color);
+        await RefreshAsync();
+    }
+
+    public async Task DeleteGroupAsync(long id)
+    {
+        if (SelectedGroupId == id)
+        {
+            SelectedGroupId = null;
+        }
+        await _db.DeleteGroupAsync(id);
+        await RefreshAsync();
+    }
+
+    public async Task EditTextItemAsync(ItemViewModel vm, string newText, bool saveAsNew)
+    {
+        if (string.IsNullOrWhiteSpace(newText)) return;
+
+        if (saveAsNew)
+        {
+            await _db.AddOrUpdateTextItemAsync(newText, sourceApp: vm.SourceApp, groupId: vm.GroupId);
+        }
+        else
+        {
+            if (vm.Id > 0)
+            {
+                await _db.UpdateTextContentAsync(vm.Id, newText);
+            }
+        }
+        await RefreshAsync();
+    }
+
+    public async Task MergeSelectedAsync(IReadOnlyList<ItemViewModel> selectedItems, string separator)
+    {
+        var textItems = selectedItems.Where(x => !string.IsNullOrEmpty(x.ContentText)).ToList();
+        if (textItems.Count == 0) return;
+
+        var merged = DatabaseService.MergeTexts(textItems.Select(x => x.ContentText!), separator);
+        if (!string.IsNullOrWhiteSpace(merged))
+        {
+            await _db.AddOrUpdateTextItemAsync(merged, sourceApp: "DeeClipper");
+            await RefreshAsync();
+        }
+    }
+
+    public async Task PasteAsAsync(ItemViewModel vm, PasteAsTransform transform)
+    {
+        if (_pasteEngine != null)
+        {
+            await _pasteEngine.ExecutePasteAsAsync(vm.Model, transform);
+        }
+        else if (!string.IsNullOrEmpty(vm.ContentText))
+        {
+            var transformed = transform switch
+            {
+                PasteAsTransform.PlainText => TextTransforms.ToPlainText(vm.ContentText),
+                PasteAsTransform.UpperCase => TextTransforms.ToUpperCase(vm.ContentText),
+                PasteAsTransform.LowerCase => TextTransforms.ToLowerCase(vm.ContentText),
+                PasteAsTransform.TitleCase => TextTransforms.ToTitleCase(vm.ContentText),
+                PasteAsTransform.SingleLine => TextTransforms.ToSingleLine(vm.ContentText),
+                PasteAsTransform.Trimmed => TextTransforms.Trim(vm.ContentText),
+                PasteAsTransform.CleanLink => TextTransforms.StripTrackingParameters(vm.ContentText),
+                _ => vm.ContentText
+            };
+            var transient = new ClipboardItem
+            {
+                Type = ClipboardItemType.Text,
+                ContentText = transformed,
+                Preview = ClipboardItem.GeneratePreview(transformed)
+            };
+            _engine.CopyToClipboard(transient);
+        }
     }
 
     public async Task MarkNotSensitiveAsync(ItemViewModel vm)

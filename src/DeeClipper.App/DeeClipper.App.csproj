@@ -23,6 +23,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Using Remove="System.Net.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="Assets\app.ico" Condition="Exists('Assets\app.ico')" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\paused.ico" Condition="Exists('Assets\paused.ico')" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

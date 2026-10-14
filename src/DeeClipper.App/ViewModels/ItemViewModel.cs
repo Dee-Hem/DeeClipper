@@ -40,6 +40,8 @@ public class ItemViewModel : INotifyPropertyChanged
         }
     }
 
+    public string PinButtonLabel => IsPinned ? "📌" : "📍";
+
     public bool IsSensitive
     {
         get => _item.IsSensitive;
@@ -73,7 +75,50 @@ public class ItemViewModel : INotifyPropertyChanged
 
     public string EyeIcon => _isMasked ? "👁️" : "🙈";
 
-    public string PinButtonLabel => IsPinned ? "★" : "☆";
+    public string? Label
+    {
+        get => _item.Label;
+        set
+        {
+            if (_item.Label != value)
+            {
+                _item.Label = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(DisplayPreview));
+            }
+        }
+    }
+
+    public long? GroupId
+    {
+        get => _item.GroupId;
+        set
+        {
+            if (_item.GroupId != value)
+            {
+                _item.GroupId = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public int PinOrder
+    {
+        get => _item.PinOrder;
+        set
+        {
+            if (_item.PinOrder != value)
+            {
+                _item.PinOrder = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(SlotBadge));
+                OnPropertyChanged(nameof(HasSlotBadge));
+            }
+        }
+    }
+
+    public string SlotBadge => (IsPinned && PinOrder is >= 1 and <= 9) ? $"Slot {PinOrder}" : string.Empty;
+    public bool HasSlotBadge => IsPinned && PinOrder is >= 1 and <= 9;
 
     public string DisplayPreview
     {
@@ -81,6 +126,8 @@ public class ItemViewModel : INotifyPropertyChanged
         {
             if (IsSensitive && IsMasked)
                 return "•••••••••••••••• (Sensitive)";
+            if (!string.IsNullOrWhiteSpace(_item.Label))
+                return _item.Label;
             return string.IsNullOrEmpty(_item.Preview) ? "(Empty)" : _item.Preview;
         }
     }

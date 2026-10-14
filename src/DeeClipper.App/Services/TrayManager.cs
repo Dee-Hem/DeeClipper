@@ -11,6 +11,7 @@ public class TrayManager : IDisposable
     private readonly ContextMenuStrip _contextMenu;
     private readonly ToolStripMenuItem _pauseMenuItem;
     private readonly Action _onOpenWindow;
+    private readonly Action _onOpenSettings;
     private readonly Action<bool> _onTogglePause;
     private readonly Action<int> _onPrivateMode;
     private readonly Action _onExit;
@@ -21,11 +22,13 @@ public class TrayManager : IDisposable
 
     public TrayManager(
         Action onOpenWindow,
+        Action onOpenSettings,
         Action<bool> onTogglePause,
         Action<int> onPrivateMode,
         Action onExit)
     {
         _onOpenWindow = onOpenWindow;
+        _onOpenSettings = onOpenSettings;
         _onTogglePause = onTogglePause;
         _onPrivateMode = onPrivateMode;
         _onExit = onExit;
@@ -40,6 +43,10 @@ public class TrayManager : IDisposable
             Font = new Font(_contextMenu.Font ?? SystemFonts.DefaultFont, FontStyle.Bold)
         };
         _contextMenu.Items.Add(openItem);
+
+        // Settings item
+        var settingsItem = new ToolStripMenuItem("Settings...", null, (_, _) => _onOpenSettings());
+        _contextMenu.Items.Add(settingsItem);
 
         _contextMenu.Items.Add(new ToolStripSeparator());
 
@@ -115,6 +122,15 @@ public class TrayManager : IDisposable
             : (_activeIcon ?? SystemIcons.Application);
 
         _notifyIcon.Text = isPaused ? "DeeClipper (Paused)" : "DeeClipper";
+    }
+
+    public void ShowBalloon(string message, string title = "DeeClipper", ToolTipIcon icon = ToolTipIcon.Warning)
+    {
+        try
+        {
+            _notifyIcon.ShowBalloonTip(4000, title, message, icon);
+        }
+        catch { }
     }
 
     public void Dispose()

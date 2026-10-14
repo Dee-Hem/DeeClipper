@@ -621,11 +621,70 @@ public class DatabaseService : IAsyncDisposable
     }
 
     /// <summary>
+    /// Updates the text content of an existing item (for editing).
+    /// </summary>
+    public async Task<bool> UpdateTextContentAsync(long id, string newText)
+    {
+        await InitializeAsync();
+
+        return await _writeQueue.EnqueueAsync(async conn =>
+        {
+            var hash = HashHelper.ComputeSha256(newText);
+            var preview = ClipboardItem.GeneratePreview(newText);
+            var byteSize = Encoding.UTF8.GetByteCount(newText);
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                UPDATE items
+                SET content_text = @content,
+                    content_hash = @hash,
+                    preview = @preview,
+                    byte_size = @size,
+                    last_used_at = @now
+                WHERE id = @id;
+            ";
+            cmd.Parameters.AddWithValue("@content", newText);
+            cmd.Parameters.AddWithValue("@hash", hash);
+            cmd.Parameters.AddWithValue("@preview", preview);
+            cmd.Parameters.AddWithValue("@size", byteSize);
+            cmd.Parameters.AddWithValue("@now", now);
+            cmd.Parameters.AddWithValue("@id", id);
+
+            var affected = await cmd.ExecuteNonQueryAsync();
+            return affected > 0;
+        });
+    }
+
+    /// <summary>
+    /// Updates last_used_at and increments use_count when an item is copied or pasted.
+    /// </summary>
+    public async Task TouchItemUsageAsync(long id)
+    {
+        await InitializeAsync();
+
+        await _writeQueue.EnqueueAsync(async conn =>
+        {
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                UPDATE items
+                SET last_used_at = @now,
+                    use_count = use_count + 1
+                WHERE id = @id;
+            ";
+            cmd.Parameters.AddWithValue("@now", now);
+            cmd.Parameters.AddWithValue("@id", id);
+            await cmd.ExecuteNonQueryAsync();
+        });
+    }
+
+    /// <summary>
     /// Searches items with ranked results (exact match -> prefix match -> substring/FTS match),
     /// then by pinned and recency. Allows filtering by type, pinned, and group.
     /// </summary>
     public async Task<List<ClipboardItem>> SearchAsync(
-        string? query,
+        string? query = null,
         ClipboardItemType? type = null,
         bool? isPinned = null,
         long? groupId = null,
@@ -868,12 +927,197 @@ public class DatabaseService : IAsyncDisposable
 
         return await _writeQueue.EnqueueAsync(async conn =>
         {
+            // CRITICAL: Deleting a group NEVER deletes its items; they become ungrouped
+            using (var unassignCmd = conn.CreateCommand())
+            {
+                unassignCmd.CommandText = "UPDATE items SET group_id = NULL WHERE group_id = @id;";
+                unassignCmd.Parameters.AddWithValue("@id", id);
+                await unassignCmd.ExecuteNonQueryAsync();
+            }
+
             using var cmd = conn.CreateCommand();
             cmd.CommandText = "DELETE FROM groups WHERE id = @id;";
             cmd.Parameters.AddWithValue("@id", id);
             var affected = await cmd.ExecuteNonQueryAsync();
             return affected > 0;
         });
+    }
+
+    public async Task<bool> UpdateGroupAsync(long id, string name, string color)
+    {
+        await InitializeAsync();
+
+        return await _writeQueue.EnqueueAsync(async conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "UPDATE groups SET name = @name, color = @color WHERE id = @id;";
+            cmd.Parameters.AddWithValue("@name", name);
+            cmd.Parameters.AddWithValue("@color", color);
+            cmd.Parameters.AddWithValue("@id", id);
+            var affected = await cmd.ExecuteNonQueryAsync();
+            return affected > 0;
+        });
+    }
+
+    /// <summary>
+    /// Gets all pinned items in pin order.
+    /// </summary>
+    public async Task<List<ClipboardItem>> GetPinnedItemsAsync()
+    {
+        return await SearchAsync(isPinned: true);
+    }
+
+    /// <summary>
+    /// Gets the pinned item corresponding to quick-paste slot (1..9).
+    /// </summary>
+    public async Task<ClipboardItem?> GetPinnedItemBySlotAsync(int slot)
+    {
+        var pinned = await GetPinnedItemsAsync();
+        return pinned.FirstOrDefault(x => x.PinOrder == slot) ?? (pinned.Count >= slot && slot >= 1 ? pinned[slot - 1] : null);
+    }
+
+    /// <summary>
+    /// Reorders pinned items based on the provided ordered list of item IDs.
+    /// </summary>
+    public async Task UpdatePinOrderAsync(IReadOnlyList<long> orderedPinnedIds)
+    {
+        await InitializeAsync();
+
+        await _writeQueue.EnqueueAsync(async conn =>
+        {
+            for (var i = 0; i < orderedPinnedIds.Count; i++)
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE items SET pin_order = @order, is_pinned = 1 WHERE id = @id;";
+                cmd.Parameters.AddWithValue("@order", i + 1);
+                cmd.Parameters.AddWithValue("@id", orderedPinnedIds[i]);
+                await cmd.ExecuteNonQueryAsync();
+            }
+        });
+    }
+
+    public async Task BulkSetPinAsync(IEnumerable<long> ids, bool isPinned)
+    {
+        await InitializeAsync();
+
+        await _writeQueue.EnqueueAsync(async conn =>
+        {
+            var idList = ids.ToList();
+            if (idList.Count == 0) return;
+
+            var nextOrder = 0;
+            if (isPinned)
+            {
+                using var orderCmd = conn.CreateCommand();
+                orderCmd.CommandText = "SELECT COALESCE(MAX(pin_order), 0) FROM items WHERE is_pinned = 1;";
+                nextOrder = Convert.ToInt32(await orderCmd.ExecuteScalarAsync());
+            }
+
+            foreach (var id in idList)
+            {
+                if (isPinned) nextOrder++;
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE items SET is_pinned = @pinned, pin_order = @order WHERE id = @id;";
+                cmd.Parameters.AddWithValue("@pinned", isPinned ? 1 : 0);
+                cmd.Parameters.AddWithValue("@order", isPinned ? nextOrder : 0);
+                cmd.Parameters.AddWithValue("@id", id);
+                await cmd.ExecuteNonQueryAsync();
+            }
+        });
+    }
+
+    public async Task BulkSetGroupAsync(IEnumerable<long> ids, long? groupId)
+    {
+        await InitializeAsync();
+
+        await _writeQueue.EnqueueAsync(async conn =>
+        {
+            var idList = ids.ToList();
+            if (idList.Count == 0) return;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"UPDATE items SET group_id = @groupId WHERE id IN ({string.Join(",", idList)});";
+            cmd.Parameters.AddWithValue("@groupId", (object?)groupId ?? DBNull.Value);
+            await cmd.ExecuteNonQueryAsync();
+        });
+    }
+
+    public async Task BulkDeleteAsync(IEnumerable<long> ids)
+    {
+        await InitializeAsync();
+
+        await _writeQueue.EnqueueAsync(async conn =>
+        {
+            var idList = ids.ToList();
+            if (idList.Count == 0) return;
+
+            var files = new List<string>();
+            using (var sel = conn.CreateCommand())
+            {
+                sel.CommandText = $"SELECT image_path, thumb_path FROM items WHERE id IN ({string.Join(",", idList)});";
+                using var reader = await sel.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    if (!reader.IsDBNull(0)) files.Add(reader.GetString(0));
+                    if (!reader.IsDBNull(1)) files.Add(reader.GetString(1));
+                }
+            }
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"DELETE FROM items WHERE id IN ({string.Join(",", idList)});";
+            await cmd.ExecuteNonQueryAsync();
+
+            CleanupFiles(files);
+        });
+    }
+
+    public async Task<ClipboardItem?> ReplaceItemTextAsync(long id, string newText)
+    {
+        await InitializeAsync();
+
+        var type = TypeDetector.DetectType(newText);
+        var isSensitive = _settings.SensitiveDetectionEnabled && SensitiveDetector.IsSensitive(newText);
+        var hash = HashHelper.ComputeSha256(newText);
+        var byteSize = Encoding.UTF8.GetByteCount(newText);
+        var preview = ClipboardItem.GeneratePreview(newText);
+        var now = DateTimeOffset.UtcNow.ToString("o");
+
+        return await _writeQueue.EnqueueAsync(async conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                UPDATE items SET
+                    content_text = @text,
+                    content_hash = @hash,
+                    type = @type,
+                    preview = @preview,
+                    byte_size = @byteSize,
+                    is_sensitive = @isSensitive,
+                    last_used_at = @now
+                WHERE id = @id;
+                SELECT * FROM items WHERE id = @id LIMIT 1;
+            ";
+            cmd.Parameters.AddWithValue("@text", newText);
+            cmd.Parameters.AddWithValue("@hash", hash);
+            cmd.Parameters.AddWithValue("@type", type.ToString());
+            cmd.Parameters.AddWithValue("@preview", preview);
+            cmd.Parameters.AddWithValue("@byteSize", byteSize);
+            cmd.Parameters.AddWithValue("@isSensitive", isSensitive ? 1 : 0);
+            cmd.Parameters.AddWithValue("@now", now);
+            cmd.Parameters.AddWithValue("@id", id);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                return MapClipboardItem(reader);
+            }
+            return null;
+        });
+    }
+
+    public static string MergeTexts(IEnumerable<string> texts, string separator)
+    {
+        return string.Join(separator, texts.Where(t => !string.IsNullOrEmpty(t)));
     }
 
     private static ClipboardItem MapClipboardItem(DbDataReader reader)
