@@ -632,7 +632,7 @@ public class DatabaseService : IAsyncDisposable
             var hash = HashHelper.ComputeSha256(newText);
             var preview = ClipboardItem.GeneratePreview(newText);
             var byteSize = Encoding.UTF8.GetByteCount(newText);
-            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var now = DateTimeOffset.UtcNow.ToString("o");
 
             using var cmd = conn.CreateCommand();
             cmd.CommandText = @"

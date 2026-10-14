@@ -1036,7 +1036,7 @@ public class SettingsWindow : Window
 
         var pathText = new TextBlock
         {
-            Text = _paths.AppDataDirectory,
+            Text = _paths.RootDirectory,
             Foreground = new MediaBrush(MediaColor.FromRgb(148, 163, 184)),
             FontSize = 12,
             VerticalAlignment = WpfVerticalAlignment.Center
@@ -1061,7 +1061,7 @@ public class SettingsWindow : Window
             {
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = _paths.AppDataDirectory,
+                    FileName = _paths.RootDirectory,
                     UseShellExecute = true
                 });
             }

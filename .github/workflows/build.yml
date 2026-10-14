@@ -62,6 +62,17 @@ jobs:
             DeeClipper-lite.zip
           retention-days: 14
 
+      - name: Read Release Notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: release_notes
+        shell: pwsh
+        run: |
+          $content = Get-Content -Path "RELEASE_NOTES.md" -Raw -Encoding UTF8
+          # GitHub Actions doesn't handle multiline output well, so we use a delimiter
+          echo "body<<EOF" >> $env:GITHUB_OUTPUT
+          echo "$content" >> $env:GITHUB_OUTPUT
+          echo "EOF" >> $env:GITHUB_OUTPUT
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -69,6 +80,7 @@ jobs:
           files: |
             DeeClipper-portable.zip
             DeeClipper-lite.zip
+          body: ${{ steps.release_notes.outputs.body }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
