@@ -5,6 +5,7 @@ using System.Windows.Media;
 using DeeClipper.App.Services;
 using DeeClipper.Core.Settings;
 using MediaBrush = System.Windows.Media.SolidColorBrush;
+using MediaBrushes = System.Windows.Media.Brushes;
 using MediaColor = System.Windows.Media.Color;
 using MediaFontFamily = System.Windows.Media.FontFamily;
 using WpfButton = System.Windows.Controls.Button;

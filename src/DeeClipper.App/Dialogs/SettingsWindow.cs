@@ -15,6 +15,7 @@ using DeeClipper.Core.Settings;
 using DeeClipper.Core.Storage;
 using Microsoft.Win32;
 using MediaBrush = System.Windows.Media.SolidColorBrush;
+using MediaBrushes = System.Windows.Media.Brushes;
 using MediaColor = System.Windows.Media.Color;
 using MediaFontFamily = System.Windows.Media.FontFamily;
 using WpfButton = System.Windows.Controls.Button;
@@ -1133,7 +1134,7 @@ public class SettingsWindow : Window
         };
         exportBtn.Click += async (_, _) =>
         {
-            var sfd = new SaveFileDialog
+            var sfd = new Microsoft.Win32.SaveFileDialog
             {
                 Title = "Export DeeClipper Backup",
                 Filter = "ZIP Archive (*.zip)|*.zip",
@@ -1173,7 +1174,7 @@ public class SettingsWindow : Window
         };
         importBtn.Click += async (_, _) =>
         {
-            var ofd = new OpenFileDialog
+            var ofd = new Microsoft.Win32.OpenFileDialog
             {
                 Title = "Import DeeClipper Backup",
                 Filter = "ZIP Archive (*.zip)|*.zip"
